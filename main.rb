@@ -8,24 +8,26 @@ require 'dnsruby'
 require 'base64'
 
 # Retrieve signature
-resolv = Dnsruby::Resolver.new
-ret = resolv.query('security.2fa.directory', 'CERT')
-GPGME::Crypto.new
-data = GPGME::Key.import(ret.answer.rrsets[0][0].cert)
+ret = Dnsruby::Resolver.new.query('security.2fa.directory', 'CERT')
 
-# Fetch key from vault
-intnd_sig = GPGME::Key.find(:public, 'security@2fa.directory')[0]
+# Import public key(s) from CERT RR
+imports = GPGME::Key.import(ret.answer.rrsets[0][0].cert).imports
 
-# Trust DNS-supplied signature
+# Fetch fingerprints from imported key(s)
+fingerprints = imports.map(&:fpr)
+
+# Specify which file to download
+filename = ARGV[0]
+
 # Fetch file
-res = Net::HTTP.get_response(URI('https://api.2fa.directory/v3/totp.json.sig')).body
-crypto = GPGME::Crypto.new
-signature = GPGME::Data.new(res)
+res = Net::HTTP.get_response(URI("https://api.2fa.directory/v3/#{filename}.sig")).body
 
-data = crypto.verify(signature) do |sig|
+# Decipher signed data file
+data = GPGME::Crypto.new.verify(GPGME::Data.new(res)) do |sig|
   # Verify that the same key as before signed the file
-  raise 'Invalid key' unless sig.key.== intnd_sig
+  raise 'Invalid key' unless sig.valid?
+  raise 'Mismatching key' unless fingerprints.include? sig.fingerprint
 end
 
 # Write verified data to new file
-File.open('totp.json', 'w') { |file| file.write data }
+File.open(filename, 'w') { |file| file.write data }
